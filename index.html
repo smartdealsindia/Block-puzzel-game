@@ -1,0 +1,462 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport"
+ content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Block Puzzle</title>
+
+<style>
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  margin: 0;
+  background: #101827;
+  color: white;
+  font-family: Arial, sans-serif;
+  text-align: center;
+  touch-action: none;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+h2 { margin: 18px 0 8px; }
+
+#score {
+  font-size: 20px;
+  margin: 12px;
+}
+
+#board {
+  width: min(92vw, 390px);
+  aspect-ratio: 1;
+  margin: 15px auto 22px;
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  grid-template-rows: repeat(10, 1fr);
+  gap: 3px;
+  padding: 5px;
+  background: #25334a;
+  border-radius: 10px;
+  touch-action: none;
+}
+
+.cell {
+  min-width: 0;
+  min-height: 0;
+  background: #34445c;
+  border-radius: 3px;
+}
+
+.cell.filled {
+  background: #39b9ed;
+  box-shadow: inset 0 0 2px #fff8;
+}
+
+.cell.preview {
+  background: #70df9b;
+}
+
+#pieces {
+  width: 100%;
+  display: flex;
+  justify-content: space-evenly;
+  align-items: center;
+  padding: 8px;
+  gap: 8px;
+  position: relative;
+}
+
+.piece {
+  width: 29vw;
+  max-width: 110px;
+  height: 100px;
+  display: grid;
+  place-items: center;
+  touch-action: none;
+  position: relative;
+}
+
+.shape {
+  display: grid;
+  gap: 3px;
+  pointer-events: none;
+}
+
+.mini {
+  width: 23px;
+  height: 23px;
+  border-radius: 3px;
+  background: #39b9ed;
+}
+
+.dragging {
+  position: fixed !important;
+  z-index: 9999;
+  pointer-events: none;
+  width: auto !important;
+  height: auto !important;
+  display: block !important;
+  margin: 0;
+  transform: translate3d(0,0,0);
+  will-change: left, top;
+  opacity: .96;
+}
+
+.dragging .shape {
+  transform-origin: top left;
+}
+
+#message {
+  color: #b9c7dc;
+  font-size: 14px;
+  margin-top: 10px;
+}
+
+button {
+  margin: 10px;
+  padding: 12px 24px;
+  border: 0;
+  border-radius: 8px;
+  background: #39b9ed;
+  color: #102033;
+  font-weight: bold;
+  font-size: 16px;
+}
+</style>
+</head>
+
+<body>
+<h2>🧩 Block Puzzle</h2>
+<div id="score">Score: <span id="points">0</span></div>
+
+<div id="board"></div>
+<div id="pieces"></div>
+<div id="message">Drag blocks onto the board</div>
+<button id="restart">Restart</button>
+
+<script>
+const SIZE = 10;
+const boardEl = document.getElementById("board");
+const piecesEl = document.getElementById("pieces");
+const pointsEl = document.getElementById("points");
+const messageEl = document.getElementById("message");
+
+let grid = Array(SIZE * SIZE).fill(0);
+let score = 0;
+let pieces = [];
+let drag = null;
+let raf = 0;
+let previewCells = [];
+
+const shapes = [
+  [[0,0]],
+  [[0,0],[0,1]],
+  [[0,0],[0,1],[0,2]],
+  [[0,0],[1,0],[1,1]],
+  [[0,0],[0,1],[1,0],[1,1]],
+  [[0,0],[1,0],[2,0]],
+  [[0,0],[0,1],[0,2],[0,3]],
+  [[0,0],[1,0],[2,0],[1,1]],
+  [[0,0],[0,1],[0,2],[1,2]],
+  [[0,0],[1,0],[1,1],[2,1]]
+];
+
+function makeBoard() {
+  boardEl.innerHTML = "";
+  for (let i = 0; i < SIZE * SIZE; i++) {
+    const cell = document.createElement("div");
+    cell.className = "cell";
+    cell.dataset.index = i;
+    boardEl.appendChild(cell);
+  }
+  renderBoard();
+}
+
+function renderBoard() {
+  [...boardEl.children].forEach((cell, i) => {
+    cell.classList.toggle("filled", !!grid[i]);
+    cell.classList.remove("preview");
+  });
+}
+
+function randomShape() {
+  return shapes[Math.floor(Math.random() * shapes.length)]
+    .map(([r,c]) => [r,c]);
+}
+
+function renderPieces() {
+  piecesEl.innerHTML = "";
+  pieces.forEach((shape, index) => {
+    if (!shape) {
+      const empty = document.createElement("div");
+      empty.className = "piece";
+      piecesEl.appendChild(empty);
+      return;
+    }
+
+    const piece = document.createElement("div");
+    piece.className = "piece";
+    piece.dataset.piece = index;
+
+    const rows = Math.max(...shape.map(p => p[0])) + 1;
+    const cols = Math.max(...shape.map(p => p[1])) + 1;
+    const shapeEl = document.createElement("div");
+    shapeEl.className = "shape";
+    shapeEl.style.gridTemplateColumns = `repeat(${cols}, 23px)`;
+    shapeEl.style.gridTemplateRows = `repeat(${rows}, 23px)`;
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const mini = document.createElement("div");
+        if (shape.some(p => p[0] === r && p[1] === c)) {
+          mini.className = "mini";
+        }
+        shapeEl.appendChild(mini);
+      }
+    }
+
+    piece.appendChild(shapeEl);
+    piecesEl.appendChild(piece);
+  });
+}
+
+function canPlace(shape, row, col) {
+  return shape.every(([r,c]) => {
+    const y = row + r, x = col + c;
+    return y >= 0 && y < SIZE &&
+           x >= 0 && x < SIZE &&
+           !grid[y * SIZE + x];
+  });
+}
+
+function clearPreview() {
+  previewCells.forEach(i => {
+    boardEl.children[i]?.classList.remove("preview");
+  });
+  previewCells = [];
+}
+
+function showPreview(shape, row, col) {
+  clearPreview();
+  if (!canPlace(shape, row, col)) return false;
+
+  shape.forEach(([r,c]) => {
+    const i = (row + r) * SIZE + col + c;
+    boardEl.children[i].classList.add("preview");
+    previewCells.push(i);
+  });
+  return true;
+}
+
+function clearLines() {
+  let fullRows = [];
+  let fullCols = [];
+
+  for (let r = 0; r < SIZE; r++) {
+    if (grid.slice(r * SIZE, r * SIZE + SIZE).every(Boolean))
+      fullRows.push(r);
+  }
+
+  for (let c = 0; c < SIZE; c++) {
+    if (Array.from({length: SIZE}, (_, r) =>
+      grid[r * SIZE + c]).every(Boolean))
+      fullCols.push(c);
+  }
+
+  fullRows.forEach(r => {
+    for (let c = 0; c < SIZE; c++) grid[r * SIZE + c] = 0;
+  });
+
+  fullCols.forEach(c => {
+    for (let r = 0; r < SIZE; r++) grid[r * SIZE + c] = 0;
+  });
+
+  score += (fullRows.length + fullCols.length) * 10;
+}
+
+function placePiece(shape, row, col) {
+  if (!canPlace(shape, row, col)) return false;
+
+  shape.forEach(([r,c]) => {
+    grid[(row + r) * SIZE + col + c] = 1;
+  });
+
+  score += shape.length;
+  clearLines();
+  pointsEl.textContent = score;
+  renderBoard();
+  return true;
+}
+
+function updateDragPosition() {
+  raf = 0;
+  if (!drag) return;
+
+  const {x, y, shape, el, grabX, grabY, cellSize} = drag;
+  const cols = Math.max(...shape.map(p => p[1])) + 1;
+  const rows = Math.max(...shape.map(p => p[0])) + 1;
+
+  // Keep the shape centered under the finger.
+  el.style.left = (x - grabX) + "px";
+  el.style.top = (y - grabY) + "px";
+
+  const boardRect = boardEl.getBoundingClientRect();
+  const centerX = x;
+  const centerY = y + rows * cellSize * 0.15;
+
+  const col = Math.round(
+    (centerX - boardRect.left - cellSize / 2) / cellSize
+  );
+  const row = Math.round(
+    (centerY - boardRect.top - cellSize / 2) / cellSize
+  );
+
+  drag.target = {row, col};
+  showPreview(shape, row, col);
+}
+
+function scheduleDrag(x, y) {
+  if (!drag) return;
+  drag.x = x;
+  drag.y = y;
+  if (!raf) raf = requestAnimationFrame(updateDragPosition);
+}
+
+function onPointerDown(e) {
+  const pieceEl = e.target.closest(".piece");
+  if (!pieceEl || !pieceEl.querySelector(".shape")) return;
+
+  e.preventDefault();
+
+  const index = Number(pieceEl.dataset.piece);
+  const shape = pieces[index];
+  if (!shape) return;
+
+  const rect = pieceEl.getBoundingClientRect();
+  const shapeEl = pieceEl.querySelector(".shape");
+  const shapeRect = shapeEl.getBoundingClientRect();
+
+  const cellSize = boardEl.getBoundingClientRect().width / SIZE;
+
+  const clone = pieceEl.cloneNode(true);
+  clone.classList.add("dragging");
+  clone.style.left = rect.left + "px";
+  clone.style.top = rect.top + "px";
+  clone.style.width = rect.width + "px";
+  clone.style.height = rect.height + "px";
+  document.body.appendChild(clone);
+
+  const cloneShape = clone.querySelector(".shape");
+  cloneShape.style.position = "absolute";
+  cloneShape.style.left = "0";
+  cloneShape.style.top = "0";
+  cloneShape.style.transform = "scale(" +
+    Math.min(1, cellSize / 27) + ")";
+  cloneShape.style.transformOrigin = "top left";
+
+  drag = {
+    index, shape, el: clone, pointerId: e.pointerId,
+    x: e.clientX, y: e.clientY,
+    grabX: Math.min(shapeRect.width / 2, 25),
+    grabY: Math.min(shapeRect.height / 2, 25),
+    cellSize, target: null
+  };
+
+  // Start directly at the finger position.
+  drag.grabX = shapeRect.width / 2;
+  drag.grabY = shapeRect.height / 2;
+
+  try {
+    pieceEl.setPointerCapture(e.pointerId);
+  } catch (_) {}
+
+  scheduleDrag(e.clientX, e.clientY);
+}
+
+function onPointerMove(e) {
+  if (!drag || e.pointerId !== drag.pointerId) return;
+  e.preventDefault();
+  scheduleDrag(e.clientX, e.clientY);
+}
+
+function onPointerUp(e) {
+  if (!drag || e.pointerId !== drag.pointerId) return;
+  e.preventDefault();
+
+  if (raf) {
+    cancelAnimationFrame(raf);
+    raf = 0;
+    updateDragPosition();
+  }
+
+  const current = drag;
+  const target = current.target;
+  let success = false;
+
+  clearPreview();
+
+  if (target) {
+    success = placePiece(
+      current.shape, target.row, target.col
+    );
+  }
+
+  current.el.remove();
+  drag = null;
+
+  if (success) {
+    pieces[current.index] = null;
+
+    if (pieces.every(p => p === null)) {
+      pieces = [randomShape(), randomShape(), randomShape()];
+    }
+
+    renderPieces();
+
+    if (!pieces.some(p => p && canFitSomewhere(p))) {
+      messageEl.textContent = "Game Over! Press Restart.";
+    } else {
+      messageEl.textContent = "Great! Keep playing.";
+    }
+  } else {
+    messageEl.textContent = "Invalid place. Try again!";
+    renderBoard();
+  }
+}
+
+function canFitSomewhere(shape) {
+  for (let r = 0; r < SIZE; r++)
+    for (let c = 0; c < SIZE; c++)
+      if (canPlace(shape, r, c)) return true;
+  return false;
+}
+
+function restart() {
+  grid = Array(SIZE * SIZE).fill(0);
+  score = 0;
+  pieces = [randomShape(), randomShape(), randomShape()];
+  pointsEl.textContent = score;
+  messageEl.textContent = "Drag blocks onto the board";
+  clearPreview();
+  renderBoard();
+  renderPieces();
+}
+
+document.addEventListener("pointerdown", onPointerDown);
+document.addEventListener("pointermove", onPointerMove, {passive: false});
+document.addEventListener("pointerup", onPointerUp, {passive: false});
+document.addEventListener("pointercancel", onPointerUp, {passive: false});
+
+document.getElementById("restart").addEventListener("click", restart);
+
+makeBoard();
+restart();
+</script>
+</body>
+</html>
